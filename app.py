@@ -1,144 +1,204 @@
 import os
-from datetime import datetime
-import pandas as pd
 import pytse_client as tse
+import pandas as pd
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+import uvicorn
 
-app = FastAPI(title="Iran Stock Technical Scanner")
+app = FastAPI(title="TSE Golden Cross Scanner")
 
-SYMBOLS = ["خودرو", "شپدیس", "ذوب", "سپه", "وغدیر"]
+# لیست نمادهای پیش‌فرض و مهم برای بررسی
+SYMBOLS = [
+    "فولاد", "فملی", "شستا", "شتران", "شبندر", 
+    "خودرو", "خساپا", "وغدیر", "تاپیکو", "وبملت",
+    "تجارت", "صبا", "نوری", "زاگرس", "پارس"
+]
 
-def get_close_column(df):
-    for col in ["close", "Close", "adjClose", "Adj Close", "close_price", "ClosePrice"]:
-        if col in df.columns:
-            return col
-    return None
-
-def analyze_symbol(symbol):
-    try:
-        data = tse.download(symbols=symbol, write_to_csv=False, adjust=True, include_jdate=True)
-        df = data.get(symbol) if isinstance(data, dict) else data
-
-        if df is None or df.empty:
-            return {"symbol": symbol, "status": "error", "message": "داده‌ای یافت نشد."}
-
-        df = df.copy()
-        col = get_close_column(df)
-        if not col:
-            return {"symbol": symbol, "status": "error", "message": "ستون قیمت پیدا نشد."}
-
-        df["ClosePrice"] = pd.to_numeric(df[col], errors="coerce")
-        df = df.dropna(subset=["ClosePrice"])
-
-        if not isinstance(df.index, pd.DatetimeIndex):
-            try:
-                df.index = pd.to_datetime(df.index)
-            except Exception:
-                pass
-        df = df.sort_index()
-
-        if len(df) < 50:
-            return {"symbol": symbol, "status": "error", "message": f"تعداد سوابق ناکافی است: {len(df)}"}
-
-        df["MA20"] = df["ClosePrice"].rolling(window=20).mean()
-        df["MA50"] = df["ClosePrice"].rolling(window=50).mean()
-        df["Spread"] = df["MA20"] - df["MA50"]
-        df["PrevSpread"] = df["Spread"].shift(1)
-
-        df["GoldenCross"] = (df["PrevSpread"] <= 0) & (df["Spread"] > 0)
-        df["DeathCross"] = (df["PrevSpread"] >= 0) & (df["Spread"] < 0)
-
-        recent_5 = df.tail(5)
-        last = df.iloc[-1]
-
-        gc = bool(recent_5["GoldenCross"].fillna(False).any())
-        dc = bool(recent_5["DeathCross"].fillna(False).any())
-
-        if gc:
-            signal = "Golden Cross"
-        elif dc:
-            signal = "Death Cross"
-        elif last["MA20"] > last["MA50"]:
-            signal = "روند صعودی"
-        else:
-            signal = "روند نزولی"
-
-        return {
-            "symbol": symbol,
-            "status": "ok",
-            "last_date": str(df.index[-1]),
-            "last_price": round(float(last["ClosePrice"]), 2),
-            "ma20": round(float(last["MA20"]), 2),
-            "ma50": round(float(last["MA50"]), 2),
-            "golden_cross_last_5_days": gc,
-            "death_cross_last_5_days": dc,
-            "signal": signal,
-        }
-    except Exception as e:
-        return {"symbol": symbol, "status": "error", "message": str(e)}
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    results = [analyze_symbol(s) for s in SYMBOLS]
-    scan_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+def analyze_symbols():
+    results = []
     
-    rows = ""
-    for item in results:
-        if item["status"] == "error":
-            rows += f"<tr><td>{item['symbol']}</td><td colspan='7' style='color:red'>خطا: {item['message']}</td></tr>"
-            continue
+    for symbol in SYMBOLS:
+        try:
+            ticker = tse.Ticker(symbol)
+            df = ticker.history
+            
+            if df.empty or len(df) < 52:
+                continue
+                
+            # مرتب‌سازی بر اساس تاریخ
+            df = df.sort_index()
+            
+            # محاسبه میانگین متحرک ۲۰ و ۵۰ روزه
+            df['MA20'] = df['close'].rolling(window=20).mean()
+            df['MA50'] = df['close'].rolling(window=50).mean()
+            
+            last_row = df.iloc[-1]
+            prev_row = df.iloc[-2]
+            
+            # تشخیص وضعیت تقاطع
+            signal = "خنثی / بدون تقاطع"
+            signal_color = "#6 خطای `Port Scan Timeout` مواجه نشود.
+2. دریافت دیتا و محاسبات داخل درخواست (On-Demand) با مکانیزم مدیریت خطا (Try/Except) انجام می‌شود تا در صورت قطعی TSETMC کل سرور کرش نکند.
+3. یک UI تمیز، راست‌چین و مدرن با فونت و استایل خوانا طراحی شده است.
 
-        color = "green" if item["signal"] == "Golden Cross" else "red" if item["signal"] == "Death Cross" else "blue" if item["signal"] == "روند صعودی" else "darkorange"
-        rows += f"""
-        <tr>
-            <td>{item['symbol']}</td>
-            <td>{item['last_date']}</td>
-            <td>{item['last_price']}</td>
-            <td>{item['ma20']}</td>
-            <td>{item['ma50']}</td>
-            <td style='color:{color}; font-weight:bold'>{item['signal']}</td>
-            <td>{item['golden_cross_last_5_days']}</td>
-            <td>{item['death_cross_last_5_days']}</td>
-        </tr>
-        """
+کل محتوای فایل `app.py` رو پاک کن و این رو جایگزین کن:
+```python
+import os
+import pytse_client as tse
+import pandas as pd
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+import uvicorn
 
-    return f"""
-    <!DOCTYPE html>
-    <html lang="fa" dir="rtl">
-    <head>
-        <meta charset="UTF-8">
-        <title>اسکنر بورس ایران</title>
-        <style>
-            body {{ font-family: Tahoma, Arial; margin: 30px; background: #f8f9fa; }}
-            table {{ width: 100%; border-collapse: collapse; background: #fff; margin-top: 20px; }}
-            th, td {{ border: 1px solid #ddd; padding: 10px; text-align: center; }}
-            th {{ background: #343a40; color: #fff; }}
-        </style>
-    </head>
-    <body>
-        <h2>اسکنر تکنیکال بورس ایران (Golden Cross)</h2>
-        <p>زمان استخراج داده: <b>{scan_time}</b></p>
-        <table>
-            <thead>
-                <tr>
-                    <th>نماد</th>
-                    <th>تاریخ آخرین کندل</th>
-                    <th>قیمت پایانی</th>
-                    <th>MA 20</th>
-                    <th>MA 50</th>
-                    <th>سیگنال / وضعیت</th>
-                    <th>تقاطع طلایی (۵ روز اخیر)</th>
-                    <th>تقاطع مرگ (۵ روز اخیر)</th>
-                </tr>
-            </thead>
-            <tbody>{rows}</tbody>
-        </table>
-    </body>
-    </html>
-    """
+app = FastAPI(title="TSE Golden Cross Scanner")
+
+# لیست نمادهای پیش‌فرض و مهم برای بررسی
+SYMBOLS = [
+"فولاد", "فملی", "شستا", "شتران", "شبندر", 
+"خودرو", "خساپا", "وغدیر", "تاپیکو", "وبملت",
+"تجارت", "صبا", "نوری", "زاگرس", "پارس"
+]
+
+def analyze_symbols():
+results = []
+
+for symbol in SYMBOLS:
+try:
+ticker = tse.Ticker(symbol)
+df = ticker.history
+
+if df.empty or len(df) < 52:
+continue
+
+# مرتب‌سازی بر اساس تاریخ
+df = df.sort_index()
+
+# محاسبه میانگین متحرک ۲۰ و ۵۰ روزه
+df['MA20'] = df['close'].rolling(window=20).mean()
+df['MA50'] = df['close'].rolling(window=50).mean()
+
+last_row = df.iloc[-1]
+prev_row = df.iloc[-2]
+
+# تشخیص وضعیت تقاطع
+signal = "خنثی / بدون تقاطع"
+signal_color = "#6c757d"
+
+# گلدن کراس: قطع کردن MA50 به سمت بالا توسط MA20
+if prev_row['MA20'] <= prev_row['MA50'] and last_row['MA20'] > last_row['MA50']:
+signal = "🚀 گلدن کراس (سیگنال خرید قوی)"
+signal_color = "#28a745"
+# د</td>
+<td>{item['date']}</td>
+<td>{item['close']} ریال</td>
+<td>{item['ma20']}</td>
+<td>{item['ma50']}</td>
+<td style="color: {item['color']}; font-weight: bold;">{item['signal']}</td>
+</tr>
+"""
+
+if not rows_html:
+rows_html = "<tr><td colspan='6'>داده‌ای دریافت نشد یا بازار در دسترس نیست. لطفاً صفحه را مجدداً رفرش کنید.</td></tr>"
+
+html_content = f"""
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>دستیار تحلیل تکنیکال بورس (Golden Cross)</title>
+<style>
+body {{
+font-family: Tahoma, 'Segoe UI', Arial, sans-serif;
+background-color: #0f172a;
+color: #e2e8f0;
+margin: 0;
+padding: 30px;
+display: flex;
+flex-direction: column;
+align-items: center;
+}}
+.container {{
+width: 95%;
+max-width: 1100px;
+}}
+h1 {{
+text-align: center;
+color: #38bdf8;
+margin-bottom: 10px;
+}}
+p.desc {{
+text-align: center;
+color: #94a3b8;
+margin-bottom: 30px;
+}}
+table {{
+width: 100%;
+border-collapse: collapse;
+background-color: #1e293b;
+box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.5);
+border-radius: 8px;
+overflow: hidden;
+}}
+th, td {{
+padding: 14px 18px;
+text-align: center;
+border-bottom: 1px solid #334155;
+}}
+th {{
+background-color: #0284c7;
+color: #ffffff;
+font-weight: 600;
+}}
+tr:hover {{
+background-color: #334155;
+transition: background-color 0.2s ease;
+}}
+.btn-refresh {{
+display: inline-block;
+margin-top: 25px;
+padding: 10px 24px;
+background-color: #0284c7;
+color: white;
+text-decoration: none;
+border-radius: 6px;
+font-weight: bold;
+transition: 0.3s;
+}}
+.btn-refresh:hover {{
+background-color: #0369a1;
+}}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>📊 دیده‌بان تکنیکال تقاطع طلایی (Golden Cross)</h1>
+<p class="desc">بررسی زنده‌ی تقاطع میانگین متحرک ۲۰ و ۵۰ روزه مستقیماً از TSETMC</p>
+<table>
+<thead>
+<tr>
+<th>نماد</th>
+<th>آخرین تاریخ معامله</th>
+<th>آخرین قیمت</th>
+<th>MA 20</th>
+<th>MA 50</th>
+<th>وضعیت سیگنال</th>
+</tr>
+</thead>
+<tbody>
+{rows_html}
+</tbody>
+</table>
+<div style="text-align: center;">
+<a href="/" class="btn-refresh">🔄 به‌روزرسانی وضعیت نمادها</a>
+</div>
+</div>
+</body>
+</html>
+"""
+return html_content
 
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("app:app", host="0.0.0.0", port=port)
+port = int(os.environ.get("PORT", 10000))
+uvicorn.run(app, host="0.0.0.0", port=port)
+
